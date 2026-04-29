@@ -21,6 +21,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from . import config as cfg
+from . import discovery
 from .cache import Cache, FixtureData
 from .watcher import Watcher
 
@@ -41,11 +42,29 @@ def _require_loaded() -> FixtureData | dict[str, str]:
     if not _cache.is_loaded():
         return {
             "error": (
-                "No active file. Call set_active_file with the path to your "
-                "Vectorworks .xml export (sits next to the .vwx file)."
+                "No active plot. Call list_plots to see recent plots, or "
+                "set_active_plot('show name') to switch by show, or "
+                "set_active_file(path) for a specific XML path."
             )
         }
     return _cache.snapshot()
+
+
+def _watch_candidate(candidate: discovery.PlotCandidate) -> dict[str, Any]:
+    """Start watching a candidate's XML and persist the choice."""
+    try:
+        _watcher.watch(candidate.xml_path)
+    except Exception as e:
+        return {"error": f"Failed to watch {candidate.xml_path}: {e}"}
+    cfg.save_active_file(candidate.xml_path)
+    snap = _cache.snapshot()
+    return {
+        "show_folder": candidate.show_folder,
+        "active_file": str(candidate.xml_path),
+        "fixtures_loaded": len(snap.fixtures),
+        "parsed_at": _format_timestamp(snap.parsed_at),
+        "modified_at": candidate.to_dict()["modified_at"],
+    }
 
 
 def _format_timestamp(ts: datetime | None) -> str | None:
@@ -107,6 +126,62 @@ def get_active_file() -> dict[str, Any]:
         "fixtures_loaded": len(snap.fixtures),
         "parse_error": snap.parse_error,
     }
+
+
+@mcp.tool()
+def list_plots(limit: int = 10) -> dict[str, Any]:
+    """List Lightwright XML files under the shows root, newest first.
+
+    Each entry has show_folder, xml_path, vwx_path, modified_at.
+    Useful for picking which plot to watch when you have multiple shows
+    open or when set_active_plot returns ambiguous matches.
+    """
+    candidates = discovery.find_plots()
+    collapsed = discovery.most_recent_plot_per_show(candidates)
+    plots = [c.to_dict() for c in collapsed[:limit]]
+    return {
+        "shows_root": str(cfg.load_shows_root()),
+        "total_shows_with_plots": len(collapsed),
+        "plots": plots,
+    }
+
+
+@mcp.tool()
+def set_active_plot(show_name: str) -> dict[str, Any]:
+    """Switch the active plot by show name (fuzzy-matched against folder names).
+
+    Examples: 'Celine', 'Eternal Sunshine', 'Hilary Duff'. Picks the most
+    recently-modified XML in the matching show's folder.
+    """
+    candidates = discovery.find_plots()
+    if not candidates:
+        return {
+            "error": (
+                f"No plots found under {cfg.load_shows_root()}. "
+                "Make sure 'Use automatic Lightwright Data Exchange' is enabled "
+                "in Vectorworks Spotlight Preferences and that your show folder "
+                "lives under that root."
+            )
+        }
+
+    matches = discovery.fuzzy_match_show(show_name, candidates)
+    if not matches:
+        return {
+            "error": f"No show matched '{show_name}'.",
+            "available_shows": sorted(
+                {c.show_folder for c in candidates}
+            ),
+        }
+
+    # Collapse to one match per show, then pick newest.
+    collapsed = discovery.most_recent_plot_per_show(matches)
+    if len(collapsed) > 1:
+        return {
+            "error": f"Ambiguous match for '{show_name}'. Pick a more specific name.",
+            "matched_shows": [c.to_dict() for c in collapsed],
+        }
+
+    return _watch_candidate(collapsed[0])
 
 
 # ─── tools: queries ───────────────────────────────────────────────────────────
@@ -334,15 +409,39 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         stream=sys.stderr,
     )
-    # Try to resume the previously-active file so the user doesn't have to
-    # re-call set_active_file every session.
+    # Try to resume the previously-active file first.
     persisted = cfg.load_active_file()
+    resumed = False
     if persisted and persisted.exists():
         try:
             _watcher.watch(persisted)
             log.info("Resumed watching %s", persisted)
+            resumed = True
         except Exception as e:
             log.warning("Could not resume watching %s: %s", persisted, e)
+
+    # Otherwise, auto-pick the most recently-modified plot under the shows root.
+    # This is the common case: Rob just worked on a show in VW and switched to
+    # Cowork — that show's XML was rewritten on focus-out, so it's freshest.
+    if not resumed:
+        candidates = discovery.find_plots()
+        if candidates:
+            newest = candidates[0]
+            try:
+                _watcher.watch(newest.xml_path)
+                cfg.save_active_file(newest.xml_path)
+                log.info(
+                    "Auto-selected most recent plot: %s (%s)",
+                    newest.show_folder,
+                    newest.xml_path,
+                )
+            except Exception as e:
+                log.warning("Auto-select failed for %s: %s", newest.xml_path, e)
+        else:
+            log.info(
+                "No plots found under %s — call list_plots or set_active_plot.",
+                cfg.load_shows_root(),
+            )
 
     mcp.run()
 
