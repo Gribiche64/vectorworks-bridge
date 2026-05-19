@@ -71,6 +71,54 @@ class TestBuildPatch:
         assert "<Symbol_Name>new symbol</Symbol_Name>" in patch
         assert "<Wattage>1234 W</Wattage>" in patch
 
+    def test_type_swap_auto_emits_use_legend_reset(self, fixtures):
+        """When Inst_Type changes, the writer must emit <Use_Legend/> to reset
+        any stale legend bound to the old symbol. Without this, VW loses
+        drawing-wide fixture selectability on import (the selectability bug)."""
+        sample = fixtures[0]
+        patch = writer.build_patch(
+            changes=[
+                {
+                    "uid": sample["uid"],
+                    "fields": {"Inst_Type": "New Type", "Symbol_Name": "new"},
+                }
+            ],
+            source_xml_path=SAMPLE,
+            cache_fixtures=fixtures,
+        )
+        assert "<Use_Legend/>" in patch
+
+    def test_caller_can_override_use_legend(self, fixtures):
+        """If caller explicitly passes Use_Legend, the auto-inject doesn't double up."""
+        sample = fixtures[0]
+        patch = writer.build_patch(
+            changes=[
+                {
+                    "uid": sample["uid"],
+                    "fields": {
+                        "Inst_Type": "New Type",
+                        "Use_Legend": "some-legend-id",
+                    },
+                }
+            ],
+            source_xml_path=SAMPLE,
+            cache_fixtures=fixtures,
+        )
+        # The caller's value should be present, and the auto-empty should NOT
+        # appear (no duplicate Use_Legend elements).
+        assert "<Use_Legend>some-legend-id</Use_Legend>" in patch
+        assert patch.count("Use_Legend") == 2  # one open tag, one close tag
+
+    def test_no_use_legend_on_non_type_swap(self, fixtures):
+        """Field-only edits (no Inst_Type change) must NOT inject Use_Legend."""
+        sample = fixtures[0]
+        patch = writer.build_patch(
+            changes=[{"uid": sample["uid"], "fields": {"Channel": "42"}}],
+            source_xml_path=SAMPLE,
+            cache_fixtures=fixtures,
+        )
+        assert "Use_Legend" not in patch
+
     def test_empty_string_field_becomes_self_closing(self, fixtures):
         sample = fixtures[0]
         patch = writer.build_patch(

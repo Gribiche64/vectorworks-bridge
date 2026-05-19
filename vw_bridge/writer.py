@@ -174,9 +174,20 @@ def build_patch(
     fixture_blocks = []
     for ch in changes:
         uid = ch["uid"]
-        fields = ch["fields"]
+        fields = dict(ch["fields"])  # copy so we can augment
         lwid = by_uid[uid].get("lightwright_id") or ""
         tag = uid_to_tag(uid)
+
+        # Type-swap protocol detail: when Inst_Type changes, Lightwright always
+        # emits an empty <Use_Legend/> element to reset any custom legend
+        # attached to the old symbol. Observed in Test.cap_8/9/10 during the
+        # original protocol decode. Omitting it caused VW to lose drawing-wide
+        # fixture selectability on import (hypothesis: VW's selection hit-test
+        # references legend geometry, which after a symbol swap points at
+        # geometry that no longer exists). Auto-inject if caller didn't.
+        if "Inst_Type" in fields and "Use_Legend" not in fields:
+            fields["Use_Legend"] = ""  # empty → self-closing tag
+
         lines = [f"    <{tag}>"]
         for name, value in fields.items():
             if value is None or value == "":

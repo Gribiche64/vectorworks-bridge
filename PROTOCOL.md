@@ -59,6 +59,14 @@ Notes:
 - `<VWVersion>` and `<VWBuild>` are VW's identifying numbers. Preserve from snapshot.
 - Element order within `<InstrumentData>` doesn't matter to VW. LW puts fixture blocks before its header on single-fixture deltas; VW puts header first. Both are accepted.
 
+## Selectability bug — `<Use_Legend/>` is not optional on type swaps
+
+**A type-swap patch that omits `<Use_Legend/>` causes Vectorworks to lose drawing-wide fixture selectability after import.** Click and marquee both do nothing on any fixture in the drawing. Cmd-Z in VW reverts.
+
+Lightwright always emits `<Use_Legend/>` (self-closing, empty) on type swaps — observed in every captured swap during protocol decode. The current hypothesis for why this matters: when a fixture's symbol changes, any custom legend that was bound to the old symbol's geometry is now pointing at geometry that no longer exists. If VW's selection hit-test queries legend geometry on every click, a stale legend leaves the hit-test querying nonexistent objects, which appears drawing-wide because the broken hit-test never gets a chance to fall through to other fixtures.
+
+**Whenever `<Inst_Type>` appears in a patch, the writer MUST emit `<Use_Legend/>` as well.** This is non-negotiable and was discovered the hard way after the MCP shipped — a clean type-swap patch via the MCP path reproduced the bug on a real show drawing.
+
 ## Per-fixture block — patch shape
 
 To change fields on an existing fixture:

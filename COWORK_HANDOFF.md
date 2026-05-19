@@ -29,6 +29,8 @@ Multiple changes in one call is fine and preferred — one patch write, one VW i
 
 Three fields must move together: **Inst_Type, Symbol_Name, Wattage**. Skipping Wattage produces a frankenfixture (new symbol on canvas, stale wattage in paperwork). The writer warns but does not refuse.
 
+> **Important — selectability bug fixed in writer ≥ 2026-05-19 evening:** A type-swap patch must also emit `<Use_Legend/>` to reset any stale legend bound to the old symbol. Without it, VW loses drawing-wide fixture selectability after import (click/marquee do nothing on any fixture; Cmd-Z reverts). The writer now auto-injects this whenever `Inst_Type` is in the patch — you don't need to pass it explicitly. See `PROTOCOL.md` for the full diagnosis. If you somehow hit this bug, Cmd-Z in VW reverts the import.
+
 ```python
 # 1. Verify the target type already exists in the drawing.
 target = find_fixture_of_type("Robe iForte LTX")
