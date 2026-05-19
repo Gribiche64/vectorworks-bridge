@@ -22,6 +22,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import config as cfg
 from . import discovery
+from . import writer
 from .cache import Cache, FixtureData
 from .watcher import Watcher
 
@@ -398,6 +399,154 @@ def plot_qc(include_old: bool = False) -> dict[str, Any]:
         "unpatched_sample": unpatched[:20],
         "missing_position_sample": no_position[:20],
         "missing_purpose_sample": no_purpose[:20],
+    }
+
+
+# ─── tools: detail lookups (support write planning) ───────────────────────────
+
+@mcp.tool()
+def get_fixture_details(uid: str) -> dict[str, Any]:
+    """Return the full parsed data for one fixture by UID (dotted form).
+
+    Use before planning a write — the caller usually needs the fixture's current
+    Lightwright_ID (preserved into the patch), current Inst_Type / Symbol_Name /
+    Wattage, and layer / position to confirm it's targeting the right fixture.
+    """
+    snap = _require_loaded()
+    if isinstance(snap, dict):
+        return snap
+    for f in snap.fixtures:
+        if f.get("uid") == uid:
+            return {"found": True, "fixture": f}
+    return {"found": False, "uid": uid}
+
+
+@mcp.tool()
+def find_fixture_of_type(inst_type: str) -> dict[str, Any]:
+    """Find an existing fixture of a given Inst_Type, for borrowing Symbol_Name and Wattage.
+
+    Returns the first match plus a count of all fixtures of that type. The
+    Symbol_Name and Wattage of the returned fixture are the canonical strings
+    to use when patching another fixture to this type via write_fixture_patch.
+
+    Pattern: 'I want UID 1246 to become a Robe iForte LTX. Find me an existing
+    LTX so I can copy its Symbol_Name and Wattage into the patch.'
+    """
+    snap = _require_loaded()
+    if isinstance(snap, dict):
+        return snap
+    sibling = writer.find_sibling_of_type(snap.fixtures, inst_type)
+    total = sum(1 for f in snap.fixtures if f.get("inst_type") == inst_type)
+    if not sibling:
+        return {
+            "found": False,
+            "inst_type": inst_type,
+            "count": 0,
+            "hint": (
+                "No fixture currently has this Inst_Type. The target symbol may "
+                "not be in VW's resource library — pre-place one in VW before "
+                "patching, or VW will reject/crash on the swap."
+            ),
+        }
+    return {
+        "found": True,
+        "inst_type": inst_type,
+        "count": total,
+        "sample_uid": sibling.get("uid"),
+        "symbol_name": sibling.get("symbol_name"),
+        "wattage": _wattage_field(sibling),
+    }
+
+
+def _wattage_field(fixture: dict[str, Any]) -> str | None:
+    """Reconstruct the XML <Wattage> string form (e.g. '1250 W') from parsed data.
+
+    The parser stores numeric watts in 'wattage_w' for arithmetic. The XML wants
+    the original string with unit suffix. We re-emit '<n> W' which matches VW's
+    output style.
+    """
+    w = fixture.get("wattage_w")
+    if w is None:
+        return None
+    if w == int(w):
+        return f"{int(w)} W"
+    return f"{w} W"
+
+
+# ─── tools: write ─────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def write_fixture_patch(changes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Apply field changes to fixtures via the Lightwright Data Exchange XML.
+
+    The MCP writes a Lightwright-style patch directly to the active XML.
+    Vectorworks' file watcher picks it up on focus-in and applies the changes
+    to the drawing — no Lightwright the application required in the loop.
+
+    Args:
+        changes: list of dicts, each with:
+            - "uid": dotted UID, e.g. "1246.1.1.0.0"
+            - "fields": dict of XML field name → string value, e.g.
+              {"Inst_Type": "Robe iForte LTX",
+               "Symbol_Name": "1826_Spot Robe iForte LTX",
+               "Wattage": "1250 W"}
+
+    Returns dict with: written_to, uids_changed, patch_size_bytes, warnings.
+
+    Safety:
+        - Refuses Delete operations (the writer is patch-only; Delete is a
+          separate operation we intentionally don't support).
+        - Refuses unknown field names (catches typos before VW sees them).
+        - Refuses UIDs not in the current snapshot.
+        - Warns (does not refuse) if Inst_Type changes without Wattage —
+          this is the 'frankenfixture' risk: new symbol but stale wattage.
+
+    To plan a type swap safely:
+        1. Call get_fixture_details(uid) to confirm target UID.
+        2. Call find_fixture_of_type(new_type) to get the correct Symbol_Name
+           and Wattage strings. If count is 0, pre-place a fixture in VW first.
+        3. Call write_fixture_patch with Inst_Type + Symbol_Name + Wattage in
+           the same change.
+    """
+    snap = _require_loaded()
+    if isinstance(snap, dict):
+        return snap
+    if not snap.source_path:
+        return {"error": "No active file path — cannot write."}
+
+    warnings = []
+    for ch in changes:
+        fields = ch.get("fields") or {}
+        if "Inst_Type" in fields and "Wattage" not in fields:
+            warnings.append(
+                f"UID {ch.get('uid')}: changed Inst_Type without Wattage. "
+                f"This may leave the fixture with a stale wattage value — "
+                f"frankenfixture risk. Consider adding Wattage to the patch."
+            )
+
+    try:
+        patch_xml = writer.build_patch(
+            changes=changes,
+            source_xml_path=snap.source_path,
+            cache_fixtures=snap.fixtures,
+        )
+    except writer.WriteError as e:
+        return {"error": str(e)}
+
+    try:
+        size = writer.write_patch(snap.source_path, patch_xml)
+    except writer.WriteError as e:
+        return {"error": str(e)}
+
+    return {
+        "written_to": str(snap.source_path),
+        "uids_changed": [ch.get("uid") for ch in changes],
+        "patch_size_bytes": size,
+        "warnings": warnings,
+        "hint": (
+            "VW will apply the changes when it next has focus. After that, the "
+            "watcher will refresh this cache automatically."
+        ),
     }
 
 

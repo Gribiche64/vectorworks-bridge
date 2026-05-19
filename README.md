@@ -23,8 +23,16 @@ make install   # installs into ~/.config/vw-bridge/venv
 
 ## Register with Claude Code
 
+From the directory you cloned this repo into:
+
 ```bash
-claude mcp add vw-bridge -- uv run --directory ~/Documents/Vibe\ coding/vw-bridge python -m vw_bridge.server
+claude mcp add vw-bridge -- uv run --directory "$(pwd)" python -m vw_bridge.server
+```
+
+Or with an explicit path:
+
+```bash
+claude mcp add vw-bridge -- uv run --directory /path/to/vectorworks-bridge python -m vw_bridge.server
 ```
 
 ## Tools
@@ -32,6 +40,8 @@ claude mcp add vw-bridge -- uv run --directory ~/Documents/Vibe\ coding/vw-bridg
 | Tool | What it does |
 |---|---|
 | `set_active_file` | Point the watcher at a specific `.xml` (current show) |
+| `set_active_plot` | Switch by show name (fuzzy match against folder names) |
+| `list_plots` | List Lightwright XML files under the shows root, newest first |
 | `get_active_file` | Show watched file + last update timestamp |
 | `get_fixture_counts` | Counts per fixture type, optional layer filter |
 | `get_fixture_summary` | Grand totals: count, weight, wattage |
@@ -39,6 +49,9 @@ claude mcp add vw-bridge -- uv run --directory ~/Documents/Vibe\ coding/vw-bridg
 | `get_channels` | Channel/universe list, filterable |
 | `get_equipment_list` | Rental-ready rollup |
 | `plot_qc` | Audit: duplicate channels, missing addresses, unpatched fixtures |
+| `get_fixture_details` | Full parsed data for one fixture by UID — use before planning a write |
+| `find_fixture_of_type` | Find a sibling fixture of a given Inst_Type — source Symbol_Name + Wattage for type swaps |
+| `write_fixture_patch` | **Write changes back to VW** — emits an LW-style patch the file watcher picks up |
 
 ## Usage in a Co-Work session
 
@@ -57,6 +70,37 @@ make test   # runs pytest
 make lint   # runs ruff
 ```
 
-## Phase 2 (future)
+## Write-back (added 2026-05-19)
 
-Write-back: a Vectorworks Python script that reads a changes file from this server and applies fixture swaps by layer. Deferred until the read pipeline is solid.
+The MCP now writes patches directly to the Lightwright Data Exchange XML — Vectorworks' file watcher picks them up and applies the changes. No Lightwright application, no Python-in-VW script required.
+
+**Recipe for a fixture type swap:**
+
+```python
+# 1. Find an existing fixture of the target type (gives you Symbol_Name + Wattage)
+target = find_fixture_of_type("Robe iForte LTX")
+# {"found": True, "count": 4, "symbol_name": "1826_Spot Robe iForte LTX",
+#  "wattage": "1250 W", "sample_uid": "1244.1.1.0.0"}
+
+# 2. Confirm the source fixture
+src = get_fixture_details("1246.1.1.0.0")
+# {"found": True, "fixture": {"inst_type": "Ayrton EagleStrike", ...}}
+
+# 3. Write the patch
+write_fixture_patch([
+    {
+        "uid": "1246.1.1.0.0",
+        "fields": {
+            "Inst_Type": target["inst_type"],
+            "Symbol_Name": target["symbol_name"],
+            "Wattage": target["wattage"],
+        },
+    }
+])
+```
+
+VW will apply the change when it next gains focus: the on-canvas symbol swaps, the data fields update, the watcher refreshes the cache.
+
+**Safety:** the writer refuses Delete operations, unknown field names, and UIDs not in the current snapshot. It warns (does not refuse) when Inst_Type changes without Wattage — the "frankenfixture" risk where the symbol swaps but the wattage stays stale.
+
+**Protocol spec:** see [PROTOCOL.md](PROTOCOL.md) for the full reverse-engineered protocol, the LW-vs-VW writer asymmetry, and known constraints (native FS path required for FSEvents, symbol must exist in resource library, etc.).
