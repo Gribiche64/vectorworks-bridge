@@ -72,6 +72,14 @@ Defensive checks the writer in this repo applies on every type swap:
 
 Both checks were added after a real-show reproduction on 2026-05-19: Cowork emitted a clean 3-fixture type-swap patch via the MCP against the Celine Dion production drawing (`Robe iForte` and `Robe Lighting iForte LTX`), VW imported it, selectability broke drawing-wide. Investigation showed neither Symbol_Name was in the .vwx resource library — the reference fixtures that would have brought them in were no longer on disk.
 
+### The damage is irreversible via the MCP
+
+A follow-up experiment on the same Celine drawing established that **a "re-stamp" patch with valid Symbol_Names does NOT restore selectability** on fixtures already broken by a prior missing-Symbol_Name patch. We re-stamped 122 broken fixtures with their correct current Inst_Type / Symbol_Name / Wattage; VW's Import Lighting Devices dialog fired, the patch was processed at the data-field layer, but the broken symbol-instance references in the .vwx binary remained dangling. The fixtures stayed unselectable.
+
+**Conclusion:** the LW Exchange protocol can mutate fixture data fields but cannot reach the .vwx's internal symbol-instance binding. Once VW has imported a patch with an unresolvable Symbol_Name and persisted the result to disk, that damage is permanent in the file. **Prevention is the only fix.** The validation check above is non-negotiable for any tool writing to this protocol.
+
+Recovery from such damage requires restoring a .vwx backup that predates the corrupting write. Auto-backups in VW's `VW Backup/` folder created after the corrupting save will themselves contain the damage. Look further back — manual versioned backups, Time Machine, prior file revisions in the project's version control.
+
 ## Per-fixture block — patch shape
 
 To change fields on an existing fixture:

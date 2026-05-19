@@ -36,6 +36,8 @@ Three fields must move together: **Inst_Type, Symbol_Name, Wattage**. Skipping W
 > The writer also auto-emits `<Use_Legend/>` whenever `Inst_Type` is in the patch (matches Lightwright's observed behaviour). Defensive — you don't need to pass it explicitly.
 >
 > See `PROTOCOL.md` for the full diagnosis. The first symptom of this bug on Celine Dion 2026-05-19 was selectability loss after a 3-fixture MCP swap whose target symbols weren't in the resource library.
+>
+> **Critical:** if this validation is ever bypassed and the bug occurs, **a follow-up MCP patch cannot fix it.** The damage lives in the .vwx binary layer, below the LW Exchange protocol. Recovery requires a .vwx backup from before the corrupting save. Don't try to "patch your way out" — restore the file.
 
 ```python
 # 1. Verify the target type already exists in the drawing.
