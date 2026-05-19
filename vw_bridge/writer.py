@@ -144,6 +144,15 @@ def build_patch(
 
     ts = utc_timestamp()
 
+    # Set of Symbol_Names known to exist in the drawing's resource library
+    # (proxied by "at least one fixture currently uses this Symbol_Name").
+    # Used to validate type-swap targets — see Attempt 3 in PROTOCOL.md.
+    existing_symbols = {
+        f.get("symbol_name")
+        for f in cache_fixtures
+        if f.get("symbol_name")
+    }
+
     # Validate every change before emitting any of them.
     for ch in changes:
         uid = ch.get("uid")
@@ -169,6 +178,31 @@ def build_patch(
                     f"The writer emits Action=Update; Delete is intentionally "
                     f"unsupported."
                 )
+
+        # Symbol_Name validation — the target symbol MUST exist in the
+        # drawing's resource library. We proxy that by "at least one current
+        # fixture uses this Symbol_Name." If you're swapping to a symbol that
+        # isn't currently in use, pre-place one fixture of that type in VW
+        # first (an "LX - MCP Example" parking layer is the conventional spot).
+        #
+        # Failure mode if we don't catch this: VW imports the patch, can't
+        # resolve the Symbol_Name against any loaded resource, leaves fixtures
+        # in a half-broken state with dangling symbol references — visually
+        # the swap may or may not appear, but the broken refs cascade into
+        # VW's selection hit-test and break selectability drawing-wide. This
+        # is the Attempt 3 / 4 failure mode from PROTOCOL.md, observed again
+        # via the MCP path on 26_309 Celine Dion on 2026-05-19.
+        target_symbol = fields.get("Symbol_Name")
+        if target_symbol and target_symbol not in existing_symbols:
+            raise WriteError(
+                f"UID {uid}: target Symbol_Name {target_symbol!r} is not in "
+                f"the drawing's resource library (no existing fixture uses "
+                f"it). Pre-place at least one fixture of the target type in "
+                f"VW (e.g. on an 'LX - MCP Example' layer) before swapping. "
+                f"If you used find_fixture_of_type() to source the symbol "
+                f"name, it would have surfaced count=0 with a hint about "
+                f"this — re-check that path."
+            )
 
     # Build the fixture blocks.
     fixture_blocks = []

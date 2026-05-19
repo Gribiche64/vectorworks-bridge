@@ -59,13 +59,18 @@ Notes:
 - `<VWVersion>` and `<VWBuild>` are VW's identifying numbers. Preserve from snapshot.
 - Element order within `<InstrumentData>` doesn't matter to VW. LW puts fixture blocks before its header on single-fixture deltas; VW puts header first. Both are accepted.
 
-## Selectability bug — `<Use_Legend/>` is not optional on type swaps
+## Selectability bug — target Symbol_Name MUST exist in the .vwx resource library
 
-**A type-swap patch that omits `<Use_Legend/>` causes Vectorworks to lose drawing-wide fixture selectability after import.** Click and marquee both do nothing on any fixture in the drawing. Cmd-Z in VW reverts.
+**A type-swap patch whose target `<Symbol_Name>` doesn't exist in the drawing's resource library causes Vectorworks to lose drawing-wide fixture selectability after import.** Click and marquee both do nothing on any fixture in the drawing. Cmd-Z in VW reverts.
 
-Lightwright always emits `<Use_Legend/>` (self-closing, empty) on type swaps — observed in every captured swap during protocol decode. The current hypothesis for why this matters: when a fixture's symbol changes, any custom legend that was bound to the old symbol's geometry is now pointing at geometry that no longer exists. If VW's selection hit-test queries legend geometry on every click, a stale legend leaves the hit-test querying nonexistent objects, which appears drawing-wide because the broken hit-test never gets a chance to fall through to other fixtures.
+This is the same failure mode as Attempt 3 from the original decode session (where VW crashed outright). With more subtle inputs, the failure presents as broken selectability rather than a hard crash — VW imports the patch, can't resolve the Symbol_Name against any loaded resource, leaves the patched fixtures in a half-broken state with dangling symbol references, and the broken refs cascade through VW's selection hit-test code.
 
-**Whenever `<Inst_Type>` appears in a patch, the writer MUST emit `<Use_Legend/>` as well.** This is non-negotiable and was discovered the hard way after the MCP shipped — a clean type-swap patch via the MCP path reproduced the bug on a real show drawing.
+Defensive checks the writer in this repo applies on every type swap:
+
+1. **Hard refuse if target `<Symbol_Name>` is not in use by any existing fixture in the current snapshot.** The MCP proxies "in resource library" with "at least one fixture uses it." False negatives are possible (a symbol can be in resources but not currently placed), but the safe answer is to ask the user to pre-place one fixture of the target type on an `LX - MCP Example` parking layer — that guarantees the symbol is loaded.
+2. **Auto-emit `<Use_Legend/>` (empty, self-closing) whenever `<Inst_Type>` is in the patch.** Matches Lightwright's observed behaviour on every captured type swap during protocol decode. Resets any legend bound to the old symbol's geometry. Defensive even if it isn't the root cause of the bug.
+
+Both checks were added after a real-show reproduction on 2026-05-19: Cowork emitted a clean 3-fixture type-swap patch via the MCP against the Celine Dion production drawing (`Robe iForte` and `Robe Lighting iForte LTX`), VW imported it, selectability broke drawing-wide. Investigation showed neither Symbol_Name was in the .vwx resource library — the reference fixtures that would have brought them in were no longer on disk.
 
 ## Per-fixture block — patch shape
 

@@ -52,14 +52,20 @@ class TestBuildPatch:
             assert "<Lightwright_ID></Lightwright_ID>" in patch
 
     def test_type_swap_includes_all_three_fields(self, fixtures):
-        sample = fixtures[0]
+        """Use a Symbol_Name from another existing fixture — the Symbol_Name
+        validation requires the target to be in the resource library."""
+        a = fixtures[0]
+        b = next(
+            f for f in fixtures[1:]
+            if f.get("symbol_name") and f["symbol_name"] != a.get("symbol_name")
+        )
         patch = writer.build_patch(
             changes=[
                 {
-                    "uid": sample["uid"],
+                    "uid": a["uid"],
                     "fields": {
-                        "Inst_Type": "New Type",
-                        "Symbol_Name": "new symbol",
+                        "Inst_Type": b["inst_type"],
+                        "Symbol_Name": b["symbol_name"],
                         "Wattage": "1234 W",
                     },
                 }
@@ -67,20 +73,27 @@ class TestBuildPatch:
             source_xml_path=SAMPLE,
             cache_fixtures=fixtures,
         )
-        assert "<Inst_Type>New Type</Inst_Type>" in patch
-        assert "<Symbol_Name>new symbol</Symbol_Name>" in patch
+        assert f"<Inst_Type>{b['inst_type']}</Inst_Type>" in patch
+        assert f"<Symbol_Name>{b['symbol_name']}</Symbol_Name>" in patch
         assert "<Wattage>1234 W</Wattage>" in patch
 
     def test_type_swap_auto_emits_use_legend_reset(self, fixtures):
         """When Inst_Type changes, the writer must emit <Use_Legend/> to reset
         any stale legend bound to the old symbol. Without this, VW loses
         drawing-wide fixture selectability on import (the selectability bug)."""
-        sample = fixtures[0]
+        a = fixtures[0]
+        b = next(
+            f for f in fixtures[1:]
+            if f.get("symbol_name") and f["symbol_name"] != a.get("symbol_name")
+        )
         patch = writer.build_patch(
             changes=[
                 {
-                    "uid": sample["uid"],
-                    "fields": {"Inst_Type": "New Type", "Symbol_Name": "new"},
+                    "uid": a["uid"],
+                    "fields": {
+                        "Inst_Type": b["inst_type"],
+                        "Symbol_Name": b["symbol_name"],
+                    },
                 }
             ],
             source_xml_path=SAMPLE,
@@ -141,6 +154,54 @@ class TestBuildPatch:
             cache_fixtures=fixtures,
         )
         assert "Stage Left &amp; House &lt;Right&gt;" in patch
+
+    def test_refuses_symbol_not_in_drawing(self, fixtures):
+        """Symbol_Name validation: target must exist as a resource in the .vwx.
+        Proxied by 'at least one current fixture uses this Symbol_Name'.
+        Without this check, VW imports the patch, fails to resolve the symbol,
+        leaves fixtures in a half-broken state, and breaks selectability
+        drawing-wide. (Attempt 3 / Celine 2026-05-19.)"""
+        sample = fixtures[0]
+        with pytest.raises(writer.WriteError, match="not in the drawing"):
+            writer.build_patch(
+                changes=[
+                    {
+                        "uid": sample["uid"],
+                        "fields": {
+                            "Inst_Type": "Made Up Type 9999",
+                            "Symbol_Name": "Definitely Not A Real Symbol 9999",
+                            "Wattage": "1234 W",
+                        },
+                    }
+                ],
+                source_xml_path=SAMPLE,
+                cache_fixtures=fixtures,
+            )
+
+    def test_allows_symbol_already_in_drawing(self, fixtures):
+        """If the target Symbol_Name is in use by some other fixture, the
+        swap is allowed — the symbol is known to be in the resource library."""
+        a, b = fixtures[0], None
+        # Find a fixture with a different Symbol_Name than fixtures[0].
+        for f in fixtures[1:]:
+            if f.get("symbol_name") and f["symbol_name"] != a.get("symbol_name"):
+                b = f
+                break
+        assert b is not None, "test fixture has only one Symbol_Name; pick a different sample"
+        patch = writer.build_patch(
+            changes=[
+                {
+                    "uid": a["uid"],
+                    "fields": {
+                        "Inst_Type": b["inst_type"],
+                        "Symbol_Name": b["symbol_name"],
+                    },
+                }
+            ],
+            source_xml_path=SAMPLE,
+            cache_fixtures=fixtures,
+        )
+        assert f"<Symbol_Name>{b['symbol_name']}</Symbol_Name>" in patch
 
     def test_refuses_unknown_uid(self, fixtures):
         with pytest.raises(writer.WriteError, match="not found"):

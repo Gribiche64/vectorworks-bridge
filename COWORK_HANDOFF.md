@@ -29,14 +29,21 @@ Multiple changes in one call is fine and preferred — one patch write, one VW i
 
 Three fields must move together: **Inst_Type, Symbol_Name, Wattage**. Skipping Wattage produces a frankenfixture (new symbol on canvas, stale wattage in paperwork). The writer warns but does not refuse.
 
-> **Important — selectability bug fixed in writer ≥ 2026-05-19 evening:** A type-swap patch must also emit `<Use_Legend/>` to reset any stale legend bound to the old symbol. Without it, VW loses drawing-wide fixture selectability after import (click/marquee do nothing on any fixture; Cmd-Z reverts). The writer now auto-injects this whenever `Inst_Type` is in the patch — you don't need to pass it explicitly. See `PROTOCOL.md` for the full diagnosis. If you somehow hit this bug, Cmd-Z in VW reverts the import.
+> **Important — selectability bug guards added in writer ≥ 2026-05-19 evening:**
+>
+> A type-swap patch whose `Symbol_Name` doesn't exist in the .vwx resource library causes VW to lose drawing-wide fixture selectability on import (click/marquee do nothing; Cmd-Z reverts). The writer now **hard-refuses** any patch whose `Symbol_Name` isn't in use by some existing fixture in the current snapshot. If you see `Symbol_Name X is not in the drawing's resource library`, ask the user to pre-place one fixture of the target type in VW (an `LX - MCP Example` parking layer is conventional) and retry.
+>
+> The writer also auto-emits `<Use_Legend/>` whenever `Inst_Type` is in the patch (matches Lightwright's observed behaviour). Defensive — you don't need to pass it explicitly.
+>
+> See `PROTOCOL.md` for the full diagnosis. The first symptom of this bug on Celine Dion 2026-05-19 was selectability loss after a 3-fixture MCP swap whose target symbols weren't in the resource library.
 
 ```python
 # 1. Verify the target type already exists in the drawing.
 target = find_fixture_of_type("Robe iForte LTX")
 if not target["found"]:
     # The symbol probably isn't in VW's resource library.
-    # Ask the user to pre-place one Robe iForte LTX in VW, then re-run.
+    # The writer will hard-refuse if Symbol_Name isn't in current fixtures
+    # — stop here and ask the user to pre-place one Robe iForte LTX in VW.
     return "Pre-place a Robe iForte LTX in VW first."
 
 # 2. Write the swap.
